@@ -62,7 +62,7 @@ async function downloadVideo() {
 }
 
 async function transcodeToHLS(originalVideoPath, jobId) {
-    await updateTranscodingStatus(jobId, "Transcoding Started");
+    await updateTranscodingStatus(jobId, "Your video is being transcoded");
     const masterPlaylist = [];
     const promises = RESOLUTIONS.map(async (resolution) => {
         const outputDir = `hls-${resolution.name}-${KEY}`;
@@ -108,6 +108,7 @@ async function transcodeToHLS(originalVideoPath, jobId) {
                             await s3Client.send(putCommand);
                             console.log(`Uploaded ${file} to S3`);
                         }
+                        await updateTranscodingStatus(jobId, `Your video is being transcoded for ${resolution.name}`);
                         resolve(outputDir);
                     } catch (error) {
                         reject(error);
@@ -124,7 +125,7 @@ async function transcodeToHLS(originalVideoPath, jobId) {
     });
 
     await Promise.all(promises);
-    await updateTranscodingStatus(jobId, "Transcoding Completed");
+    await updateTranscodingStatus(jobId, "Your video is ready to be played");
 
     const masterPlaylistContent = '#EXTM3U\n' + masterPlaylist.join('\n');
     const masterPlaylistPath = `master-${KEY}.m3u8`;
