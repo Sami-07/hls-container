@@ -9,6 +9,7 @@
     "license": "ISC",
     "description": "",
     "dependencies": {
+        "@aws-sdk/client-dynamodb": "^3.716.0",
         "@aws-sdk/client-s3": "^3.689.0",
         "@aws-sdk/s3-request-presigner": "^3.689.0",
         "dotenv": "^16.4.5",

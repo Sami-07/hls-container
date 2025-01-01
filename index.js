@@ -1,6 +1,5 @@
-// container/index.js
-
 const { S3Client, GetObjectCommand, PutObjectCommand } = require("@aws-sdk/client-s3");
+const { DynamoDBClient, PutItemCommand, GetItemCommand } = require("@aws-sdk/client-dynamodb");
 const dotenv = require("dotenv");
 const fs = require("fs");
 const path = require("path");
@@ -22,9 +21,24 @@ const s3Client = new S3Client({
     }
 });
 
+const dynamoDBClient = new DynamoDBClient({ region: "ap-south-1" });
+
 const BUCKET_NAME = process.env.BUCKET_NAME;
 const KEY = process.env.KEY;
 const PRODUCTION_BUCKET = "video-transcoding-bucket-production";
+
+async function updateTranscodingStatus(jobId, status) {
+    const command = new PutItemCommand({
+        TableName: "TranscodingStatus",
+        Item: {
+            jobId: { S: jobId },
+            status: { S: status },
+            timestamp: { S: new Date().toISOString() }
+        }
+    });
+    await dynamoDBClient.send(command);
+}
+
 async function downloadVideo() {
     const command = new GetObjectCommand({
         Bucket: BUCKET_NAME,
@@ -37,7 +51,6 @@ async function downloadVideo() {
     }
 
     const originalFilePath = `original-video-${KEY}`;
-    // Stream the S3 object to a file
     const writableStream = fs.createWriteStream(originalFilePath);
     await new Promise((resolve, reject) => {
         response.Body.pipe(writableStream)
@@ -48,13 +61,13 @@ async function downloadVideo() {
     return path.resolve(originalFilePath);
 }
 
-async function transcodeToHLS(originalVideoPath) {
+async function transcodeToHLS(originalVideoPath, jobId) {
+    await updateTranscodingStatus(jobId, "Transcoding Started");
     const masterPlaylist = [];
     const promises = RESOLUTIONS.map(async (resolution) => {
         const outputDir = `hls-${resolution.name}-${KEY}`;
         const outputM3U8 = path.join(outputDir, 'index.m3u8');
 
-        // Ensure output directory exists
         await fs.promises.mkdir(outputDir, { recursive: true });
 
         return new Promise((resolve, reject) => {
@@ -80,7 +93,6 @@ async function transcodeToHLS(originalVideoPath) {
                 .on('end', async () => {
                     try {
                         console.log(`\nHLS transcoding completed for ${resolution.name}`);
-
                         masterPlaylist.push(`#EXT-X-STREAM-INF:BANDWIDTH=${parseInt(resolution.bitrate) * 1000},RESOLUTION=${resolution.width}x${resolution.height}\n${outputDir}/index.m3u8`);
 
                         const files = await fs.promises.readdir(outputDir);
@@ -112,12 +124,12 @@ async function transcodeToHLS(originalVideoPath) {
     });
 
     await Promise.all(promises);
+    await updateTranscodingStatus(jobId, "Transcoding Completed");
 
     const masterPlaylistContent = '#EXTM3U\n' + masterPlaylist.join('\n');
     const masterPlaylistPath = `master-${KEY}.m3u8`;
     fs.writeFileSync(masterPlaylistPath, masterPlaylistContent);
 
-    // Upload master playlist to S3
     const masterPlaylistStream = fs.createReadStream(masterPlaylistPath);
     const putMasterCommand = new PutObjectCommand({
         Bucket: PRODUCTION_BUCKET,
@@ -128,12 +140,26 @@ async function transcodeToHLS(originalVideoPath) {
     console.log(`Uploaded master playlist to S3: ${masterPlaylistPath}`);
 }
 
+async function getTranscodingStatus(jobId) {
+    const command = new GetItemCommand({
+        TableName: "TranscodingStatus",
+        Key: {
+            jobId: { S: jobId }
+        }
+    });
+
+    const data = await dynamoDBClient.send(command);
+    return data.Item ? data.Item.status.S : "Job not found";
+}
+
 async function main() {
+    const jobId = KEY; 
     try {
         const originalVideoPath = await downloadVideo();
-        await transcodeToHLS(originalVideoPath);
+        await transcodeToHLS(originalVideoPath, jobId);
     } catch (error) {
         console.error("An error occurred:", error);
+        await updateTranscodingStatus(jobId, "Error: " + error.message);
         process.exit(1);
     }
 }
